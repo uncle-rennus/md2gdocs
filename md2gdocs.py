@@ -3,7 +3,9 @@
 md2gdocs.py - Convert Markdown files to Google Docs with batch processing, templates, and secure credential management.
 Simplified version using Google Drive's built-in Markdown conversion.
 """
+import io
 import os
+import re
 import glob
 import logging
 import sys
@@ -16,7 +18,7 @@ from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 from dotenv import load_dotenv
 
 # Set up proper Unicode handling for Windows
@@ -46,6 +48,38 @@ TOKEN_FILE = 'token.json'
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def preprocess_markdown(content: str) -> str:
+    """Preprocess markdown to handle elements that Google's converter struggles with."""
+    
+    # Extract footnote definitions and convert to inline references
+    footnote_map = {}
+    definition_pattern = re.compile(r'\[\^(\d+)\]:\s*(.+)$', re.MULTILINE)
+    
+    for match in definition_pattern.finditer(content):
+        footnote_id = match.group(1)
+        footnote_text = match.group(2).strip()
+        footnote_map[footnote_id] = footnote_text
+    
+    # Replace footnote references with inline references
+    if footnote_map:
+        ref_pattern = re.compile(r'\[\^(\d+)\]')
+        
+        def replace_footnote(match):
+            fn_id = match.group(1)
+            if fn_id in footnote_map:
+                return f"[({footnote_map[fn_id]})]"
+            return ""
+        
+        content = ref_pattern.sub(replace_footnote, content)
+        
+        # Remove footnote definition lines
+        content = definition_pattern.sub('', content)
+    
+    # Remove reference-style image links that might cause issues (keep alt text)
+    content = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', content)
+    
+    return content
 
 def load_secrets() -> Dict[str, str]:
     """Load secrets from environment variables or .env file."""
@@ -89,80 +123,51 @@ def authenticate(secrets: Dict[str, str]) -> Credentials:
 
 def upload_markdown_to_docs(drive_service, docs_service, file_path: str, template_doc_id: Optional[str] = None, output_folder_id: Optional[str] = None) -> str:
     """Upload Markdown file and convert to Google Docs format with proper template support."""
-    file_name = Path(file_path).stem  # Use stem for document name
+    file_name = Path(file_path).stem
     doc_name = f"{file_name}"
-
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        markdown_content = f.read()
+    
+    preprocessed_content = preprocess_markdown(markdown_content)
+    
+    media = MediaIoBaseUpload(
+        io.BytesIO(preprocessed_content.encode('utf-8')),
+        mimetype='text/markdown',
+        resumable=True
+    )
+    
+    markdown_file = drive_service.files().create(
+        body={
+            'name': f"{doc_name}.md",
+            'mimeType': 'text/markdown',
+            'parents': [output_folder_id] if output_folder_id else []
+        },
+        media_body=media
+    ).execute()
+    
+    markdown_file_id = markdown_file['id']
+    logger.info(f"Uploaded Markdown file: {markdown_file_id}")
+    
+    converted_doc = drive_service.files().copy(
+        fileId=markdown_file_id,
+        body={
+            'name': doc_name,
+            'mimeType': 'application/vnd.google-apps.document',
+            'parents': [output_folder_id] if output_folder_id else []
+        }
+    ).execute()
+    
+    final_doc_id = converted_doc['id']
+    logger.info(f"Converted Markdown to Google Doc: {final_doc_id}")
+    
     if template_doc_id:
-        # Simplified approach: Use Google's conversion, then apply template elements
-        # Step 1: Upload Markdown and let Google convert it (perfect formatting)
-        markdown_file = drive_service.files().create(
-            body={
-                'name': f"{doc_name}.md",
-                'mimeType': 'text/markdown',
-                'parents': [output_folder_id] if output_folder_id else []
-            },
-            media_body=MediaFileUpload(file_path, mimetype='text/markdown', resumable=True)
-        ).execute()
-        
-        markdown_file_id = markdown_file['id']
-        logger.info(f"Uploaded Markdown file: {markdown_file_id}")
-
-        # Step 2: Convert to Google Docs format (Google does perfect conversion)
-        converted_doc = drive_service.files().copy(
-            fileId=markdown_file_id,
-            body={
-                'name': doc_name,
-                'mimeType': 'application/vnd.google-apps.document',
-                'parents': [output_folder_id] if output_folder_id else []
-            }
-        ).execute()
-        
-        final_doc_id = converted_doc['id']
-        logger.info(f"Converted Markdown to Google Doc with perfect formatting: {final_doc_id}")
-
-        # Step 3: Apply template styling by copying key elements
-        # For now, we'll just use the converted document as-is
-        # In a future enhancement, we could copy headers/footers from template
         logger.info(f"Template styling would be applied here (future enhancement)")
-        
-        # Step 4: Clean up temporary Markdown file
-        drive_service.files().delete(fileId=markdown_file_id).execute()
-        logger.info(f"Cleaned up temporary Markdown file: {markdown_file_id}")
-        
-        return final_doc_id
-    else:
-        # No template: Use the original approach with Google's conversion
-        # Upload Markdown and let Google convert it
-        markdown_file = drive_service.files().create(
-            body={
-                'name': f"{doc_name}.md",
-                'mimeType': 'text/markdown',
-                'parents': [output_folder_id] if output_folder_id else []
-            },
-            media_body=MediaFileUpload(file_path, mimetype='text/markdown', resumable=True)
-        ).execute()
-        
-        markdown_file_id = markdown_file['id']
-        logger.info(f"Uploaded Markdown file: {markdown_file_id}")
-
-        # Convert to Google Docs format
-        converted_doc = drive_service.files().copy(
-            fileId=markdown_file_id,
-            body={
-                'name': doc_name,
-                'mimeType': 'application/vnd.google-apps.document',
-                'parents': [output_folder_id] if output_folder_id else []
-            }
-        ).execute()
-        
-        final_doc_id = converted_doc['id']
-        logger.info(f"Converted Markdown to Google Doc: {final_doc_id}")
-
-        # Clean up temporary Markdown file
-        drive_service.files().delete(fileId=markdown_file_id).execute()
-        logger.info(f"Cleaned up temporary Markdown file: {markdown_file_id}")
-        
-        return final_doc_id
+    
+    drive_service.files().delete(fileId=markdown_file_id).execute()
+    logger.info(f"Cleaned up temporary Markdown file: {markdown_file_id}")
+    
+    return final_doc_id
 
 def create_document(drive_service, docs_service, md_file: str, template_doc_id: Optional[str] = None, output_folder_id: Optional[str] = None) -> str:
     """Create a Google Doc from markdown using simple upload."""
