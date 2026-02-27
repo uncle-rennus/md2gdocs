@@ -49,10 +49,12 @@ TOKEN_FILE = 'token.json'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def preprocess_markdown(content: str) -> str:
-    """Preprocess markdown to handle elements that Google's converter struggles with."""
+def preprocess_markdown(content: str) -> tuple[str, Dict[str, str]]:
+    """Preprocess markdown to handle elements that Google's converter struggles with.
     
-    # Extract footnote definitions and convert to inline references
+    Returns:
+        tuple: (preprocessed_content, footnote_map)
+    """
     footnote_map = {}
     definition_pattern = re.compile(r'\[\^(\d+)\]:\s*(.+)$', re.MULTILINE)
     
@@ -61,25 +63,21 @@ def preprocess_markdown(content: str) -> str:
         footnote_text = match.group(2).strip()
         footnote_map[footnote_id] = footnote_text
     
-    # Replace footnote references with inline references
     if footnote_map:
         ref_pattern = re.compile(r'\[\^(\d+)\]')
         
         def replace_footnote(match):
             fn_id = match.group(1)
             if fn_id in footnote_map:
-                return f"[({footnote_map[fn_id]})]"
+                return f"[{fn_id}]"
             return ""
         
         content = ref_pattern.sub(replace_footnote, content)
-        
-        # Remove footnote definition lines
         content = definition_pattern.sub('', content)
     
-    # Remove reference-style image links that might cause issues (keep alt text)
     content = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', content)
     
-    return content
+    return content, footnote_map
 
 def load_secrets() -> Dict[str, str]:
     """Load secrets from environment variables or .env file."""
@@ -129,7 +127,7 @@ def upload_markdown_to_docs(drive_service, docs_service, file_path: str, templat
     with open(file_path, 'r', encoding='utf-8') as f:
         markdown_content = f.read()
     
-    preprocessed_content = preprocess_markdown(markdown_content)
+    preprocessed_content, footnote_map = preprocess_markdown(markdown_content)
     
     media = MediaIoBaseUpload(
         io.BytesIO(preprocessed_content.encode('utf-8')),
@@ -160,6 +158,9 @@ def upload_markdown_to_docs(drive_service, docs_service, file_path: str, templat
     
     final_doc_id = converted_doc['id']
     logger.info(f"Converted Markdown to Google Doc: {final_doc_id}")
+    
+    if footnote_map:
+        logger.info(f"Processed {len(footnote_map)} footnotes (converted to inline references)")
     
     if template_doc_id:
         logger.info(f"Template styling would be applied here (future enhancement)")
