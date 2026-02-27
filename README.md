@@ -25,14 +25,18 @@ A minimalist Python CLI tool for converting Markdown files to Google Docs, suppo
 - **Two CLI output modes**:
   - **single-tabs**: All files combined into one document with section headings as tabs
   - **multi-docs**: Each file converted to a separate Google Doc
+- **Markdown parsing** with support for headings, bold, italic, code, links, and lists
 - **Google Docs style templating** (optional)
 - **Glob patterns** for Markdown file selection
 - **Minimal dependencies** using only:
-  - `google-api-python-client`, `google-auth-oauthlib`, `google-auth-httplib2`, `python-dotenv`
+  - `google-api-python-client`, `google-auth-oauthlib`, `google-auth-httplib2`, `python-dotenv`, `mistune`
 - **Secret management** supporting environment variables and `.env` files (never hardcoded)
 - **OAuth2 token caching** for browserless re-authentication
 - **Detailed logging, error handling, and actionable troubleshooting info**
 - **Cross-platform**: Windows & Linux support
+- **Customizable formatting** for technical documentation
+- **Modern CLI** using Typer with better error handling and help messages
+- **Multiple commands**: `convert`, `version`, `setup` for different operations
 
 ---
 
@@ -52,6 +56,7 @@ google-api-python-client==1.12.5
 google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
 python-dotenv==1.0.0
+mistune==3.0.2
 ```
 
 ---
@@ -130,34 +135,58 @@ $env:GOOGLE_CLIENT_SECRET="your-client-secret-here"
 
 ## Usage Examples
 
-Run the tool using the following CLI syntax:
+The tool now uses **Typer** for a modern CLI interface with better error handling and help messages.
+
+### Basic Syntax:
 
 ```bash
-python md2gdocs.py [markdown-file-patterns] [--mode MODE] [--use-template] [--output-folder FOLDER] [--verbose/-v] [--dry-run]
+python md2gdocs.py convert [OPTIONS] FILES...
 ```
 
-Where:
-- `[markdown-file-patterns]` can be one or more glob patterns (e.g., `docs/*.md`)
-- `--mode`: either `single-tabs` (default: `multi-docs`)
-- `--use-template`: Apply template Google Doc styles
-- `--output-folder`: Specify Google Drive folder ID
-- `--dry-run`: Print what would be converted, but don’t upload
-- `--verbose`, `-v`: More logging
+### Available Commands:
+
+```bash
+# Show help
+python md2gdocs.py --help
+
+# Show version
+python md2gdocs.py version
+
+# Show setup instructions
+python md2gdocs.py setup
+
+# Convert files
+python md2gdocs.py convert FILES... [OPTIONS]
+```
+
+### Command Options:
+
+- `FILES...`: One or more Markdown files or glob patterns (e.g., `docs/*.md`) [required]
+- `--mode, -m`: Output mode: `'single-tabs'` (one doc) or `'multi-docs'` (separate docs) [default: multi-docs]
+- `--use-template, -t`: Apply template styles from Google Docs template
+- `--verbose, -v`: Enable verbose logging for debugging
+- `--dry-run, -d`: Preview what would be converted without uploading
 
 ### Real Examples:
 
 ```bash
 # Convert a single file to a new Google Doc
-python md2gdocs.py README.md
+python md2gdocs.py convert README.md
 
 # Convert multiple files (glob pattern) to one Google Doc, using tabs/sections
-python md2gdocs.py docs/*.md --mode single-tabs
+python md2gdocs.py convert docs/*.md --mode single-tabs
 
 # Convert all .md files to individual Google Docs with template
-python md2gdocs.py *.md --mode multi-docs --use-template
+python md2gdocs.py convert *.md --mode multi-docs --use-template
 
-# Preview operation, verbose output, no upload/action
-python md2gdocs.py *.md --verbose --dry-run
+# Preview operation with verbose output, no upload
+python md2gdocs.py convert *.md --verbose --dry-run
+
+# Show version information
+python md2gdocs.py version
+
+# Show setup instructions
+python md2gdocs.py setup
 ```
 
 ---
@@ -201,6 +230,81 @@ OUTPUT_FOLDER_ID=
 
 ---
 
+## Customizing Formatting
+
+You can customize the formatting by modifying the `STYLE_CONFIG` dictionary in `md2gdocs.py`.
+
+**Note about mistune**: The current implementation uses regex-based parsing for reliability. The mistune library is installed but not currently used due to compatibility issues with mistune 3.x. This will be addressed in a future update to provide even better Markdown parsing.
+
+### Available Style Options:
+
+```python
+STYLE_CONFIG = {
+    'headings': {
+        1: {'namedStyleType': 'HEADING_1', 'fontSize': 24, 'bold': True},
+        2: {'namedStyleType': 'HEADING_2', 'fontSize': 20, 'bold': True},
+        3: {'namedStyleType': 'HEADING_3', 'fontSize': 16, 'bold': True}
+    },
+    'code': {
+        'fontFamily': 'Courier New',
+        'backgroundColor': {'red': 0.95, 'green': 0.95, 'blue': 0.95},
+        'indent': 36,
+        'lineSpacing': 100
+    },
+    'paragraph': {
+        'lineSpacing': 115,
+        'spaceAbove': 0,
+        'spaceBelow': 0
+    },
+    'list': {
+        'indent': 24,
+        'bulletType': 'BULLET_DISC'
+    },
+    'link': {
+        'color': {'red': 0.1, 'green': 0.45, 'blue': 0.9},
+        'underline': True
+    }
+}
+```
+
+### Common Customizations:
+
+**Change code font and background:**
+```python
+STYLE_CONFIG['code'] = {
+    'fontFamily': 'Consolas',
+    'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9},
+    'indent': 24,
+    'lineSpacing': 100
+}
+```
+
+**Change heading sizes:**
+```python
+STYLE_CONFIG['headings'] = {
+    1: {'namedStyleType': 'HEADING_1', 'fontSize': 28, 'bold': True},
+    2: {'namedStyleType': 'HEADING_2', 'fontSize': 22, 'bold': True},
+    3: {'namedStyleType': 'HEADING_3', 'fontSize': 18, 'bold': True}
+}
+```
+
+**Change link colors:**
+```python
+STYLE_CONFIG['link'] = {
+    'color': {'red': 0.0, 'green': 0.5, 'blue': 0.5},  # Teal color
+    'underline': False
+}
+```
+
+**Change paragraph spacing:**
+```python
+STYLE_CONFIG['paragraph'] = {
+    'lineSpacing': 150,  # 1.5 line spacing
+    'spaceAbove': 6,     # 6pt space above
+    'spaceBelow': 6      # 6pt space below
+}
+```
+
 ## Security Notes
 
 **Never commit sensitive or generated files.** All the following are already protected by `.gitignore`:
@@ -212,7 +316,7 @@ OUTPUT_FOLDER_ID=
 - `*.pyc`
 - `.DS_Store`
 
-**Do not log credentials.**   
+**Do not log credentials.**
 **Never hardcode secrets.**
 
 
