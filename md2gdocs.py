@@ -87,53 +87,54 @@ def convert_footnotes_to_real(doc_id: str, docs_service, footnote_map: Dict[str,
     doc = docs_service.documents().get(documentId=doc_id).execute()
     content = doc.get('body', {}).get('content', [])
     
-    requests = []
     footnote_refs = []
     
-    footnote_ref_pattern = re.compile(r'(?<!\d)\[(\d+)\](?!\d):?\s*')
+    footnote_ref_pattern = re.compile(r'\[(\d+)\]')
     
-    last_para_has_footnote_def = False
-    for i, element in enumerate(content):
-        if 'paragraph' in element:
-            paragraph = element['paragraph']
-            text_content = ''
-            if 'elements' in paragraph:
-                for elem in paragraph['elements']:
-                    if 'textRun' in elem and 'content' in elem['textRun']:
-                        text_content += elem['textRun']['content']
+    def is_footnote_definition(text: str) -> bool:
+        stripped = text.strip()
+        return bool(re.match(r'^\[\d+\]:\s*.+', stripped))
+    
+    for element in content:
+        if 'paragraph' not in element:
+            continue
             
-            def_check = re.match(r'^\[\d+\]:\s*.+', text_content.strip())
-            if def_check:
-                last_para_has_footnote_def = True
-                continue
-            elif last_para_has_footnote_def and text_content.strip() == '':
-                last_para_has_footnote_def = True
-                continue
-            else:
-                last_para_has_footnote_def = False
-            
-            if last_para_has_footnote_def:
-                continue
-            
-            if 'elements' in paragraph:
-                for elem in paragraph['elements']:
-                    if 'textRun' in elem and 'content' in elem['textRun']:
-                        text = elem['textRun']['content']
-                        matches = list(footnote_ref_pattern.finditer(text))
-                        
-                        for match in matches:
-                            fn_id = match.group(1)
-                            if fn_id in footnote_map:
-                                start_idx = elem['startIndex'] + match.start() + 1
-                                end_idx = elem['startIndex'] + match.end() + 1
-                                footnote_refs.append({
-                                    'start': start_idx,
-                                    'end': end_idx,
-                                    'fn_id': fn_id,
-                                    'text': footnote_map[fn_id]
-                                })
+        paragraph = element['paragraph']
+        para_text = ''
+        if 'elements' in paragraph:
+            for elem in paragraph['elements']:
+                if 'textRun' in elem and 'content' in elem['textRun']:
+                    para_text += elem['textRun']['content']
+        
+        if is_footnote_definition(para_text):
+            continue
+        
+        if 'elements' in paragraph:
+            for elem in paragraph['elements']:
+                if 'textRun' not in elem or 'content' not in elem['textRun']:
+                    continue
+                    
+                text = elem['textRun']['content']
+                
+                for match in footnote_ref_pattern.finditer(text):
+                    fn_id = match.group(1)
+                    if fn_id not in footnote_map:
+                        continue
+                    
+                    start_idx = elem['startIndex'] + match.start()
+                    end_idx = elem['startIndex'] + match.end()
+                    
+                    footnote_refs.append({
+                        'start': start_idx,
+                        'end': end_idx,
+                        'fn_id': fn_id,
+                        'text': footnote_map[fn_id]
+                    })
     
     footnote_refs.sort(key=lambda x: x['start'], reverse=True)
+    
+    requests = []
+    footnote_contents = {}
     
     for ref in footnote_refs:
         requests.append({
@@ -153,40 +154,44 @@ def convert_footnotes_to_real(doc_id: str, docs_service, footnote_map: Dict[str,
                 }
             }
         })
+        footnote_contents[ref['start']] = ref['text']
     
-    if requests:
-        result = docs_service.documents().batchUpdate(
-            documentId=doc_id,
-            body={'requests': requests}
-        ).execute()
-        
-        replies = result.get('replies', [])
-        
-        footnote_contents = {}
-        reply_idx = 0
-        for ref in footnote_refs:
-            if reply_idx < len(replies) and 'createFootnote' in replies[reply_idx]:
-                fn_id = replies[reply_idx]['createFootnote']['footnoteId']
-                footnote_contents[fn_id] = ref['text']
-            reply_idx += 2
-        
-        updated_doc = docs_service.documents().get(documentId=doc_id).execute()
-        footnotes = updated_doc.get('footnotes', {})
-        
-        for fn_id, fn_text in footnote_contents.items():
-            if fn_id in footnotes:
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={'requests': [{
-                        'insertText': {
-                            'location': {'segmentId': fn_id, 'index': 0},
-                            'text': fn_text
-                        }
-                    }]}
-                ).execute()
-        
-        logger.info(f"Created {len(footnote_contents)} real footnotes")
+    if not requests:
+        logger.info("No footnote references found")
+        remove_footnote_definitions(doc_id, docs_service)
+        return
     
+    result = docs_service.documents().batchUpdate(
+        documentId=doc_id,
+        body={'requests': requests}
+    ).execute()
+    
+    replies = result.get('replies', [])
+    
+    fn_id_map = {}
+    req_idx = 0
+    for ref in footnote_refs:
+        if req_idx < len(replies) and 'createFootnote' in replies[req_idx]:
+            fn_id = replies[req_idx]['createFootnote']['footnoteId']
+            fn_id_map[ref['start']] = fn_id
+        req_idx += 2
+    
+    updated_doc = docs_service.documents().get(documentId=doc_id).execute()
+    footnotes = updated_doc.get('footnotes', {})
+    
+    for start_idx, fn_id in fn_id_map.items():
+        if fn_id in footnotes:
+            docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={'requests': [{
+                    'insertText': {
+                        'location': {'segmentId': fn_id, 'index': 0},
+                        'text': footnote_contents[start_idx]
+                    }
+                }]}
+            ).execute()
+    
+    logger.info(f"Created {len(fn_id_map)} real footnotes")
     remove_footnote_definitions(doc_id, docs_service)
 
 def remove_footnote_definitions(doc_id: str, docs_service) -> None:
