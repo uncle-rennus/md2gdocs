@@ -25,8 +25,10 @@ from dotenv import load_dotenv
 if sys.platform == "win32":
     import codecs
     try:
-        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
-        sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
+        if hasattr(sys.stdout, 'detach'):
+            sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
+        if hasattr(sys.stderr, 'detach'):
+            sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
     except:
         pass  # If already set or can't be set, continue anyway
 
@@ -227,7 +229,7 @@ def remove_footnote_definitions(doc_id: str, docs_service) -> None:
         ).execute()
         logger.info("Removed footnote definitions from document")
 
-def load_secrets() -> Dict[str, str]:
+def load_secrets() -> Dict[str, Optional[str]]:
     """Load secrets from environment variables or .env file."""
     load_dotenv('.env', override=False)
     secrets = {
@@ -241,7 +243,7 @@ def load_secrets() -> Dict[str, str]:
         exit(1)
     return secrets
 
-def authenticate(secrets: Dict[str, str]) -> Credentials:
+def authenticate(secrets: Dict[str, Optional[str]]) -> Credentials:
     """Authenticate with Google APIs and cache token."""
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -263,8 +265,8 @@ def authenticate(secrets: Dict[str, str]) -> Credentials:
                 SCOPES
             )
             creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
+    with open(TOKEN_FILE, 'w') as token:
+        token.write(creds.to_json())
     return creds
 
 def upload_markdown_to_docs(drive_service, docs_service, file_path: str, template_doc_id: Optional[str] = None, output_folder_id: Optional[str] = None) -> str:
@@ -277,47 +279,78 @@ def upload_markdown_to_docs(drive_service, docs_service, file_path: str, templat
     
     preprocessed_content, footnote_map = preprocess_markdown(markdown_content)
     
-    media = MediaIoBaseUpload(
-        io.BytesIO(preprocessed_content.encode('utf-8')),
-        mimetype='text/markdown',
-        resumable=True
-    )
+    # If template is specified, copy the template document first
+    if template_doc_id and drive_service:
+        try:
+            # Copy the template document
+            copied_file = drive_service.files().copy(
+                fileId=template_doc_id,
+                body={
+                    'name': doc_name,
+                    'parents': [output_folder_id] if output_folder_id else []
+                }
+            ).execute()
+            final_doc_id = copied_file['id']
+            logger.info(f"Created document from template {template_doc_id}: {final_doc_id}")
+            
+            # Insert the markdown content into the copied template
+            requests = [{
+                'insertText': {
+                    'location': {'index': 1},  # Start after any potential header
+                    'text': preprocessed_content
+                }
+            }]
+            
+            docs_service.documents().batchUpdate(
+                documentId=final_doc_id,
+                body={'requests': requests}
+            ).execute()
+            
+            logger.info(f"Inserted markdown content into template document: {final_doc_id}")
+            
+        except Exception as e:
+            logger.warning(f"Could not use template (Drive API may not be enabled or template invalid): {str(e)}")
+            # Fall back to creating blank document and inserting content
+            final_doc_id = _create_blank_document_and_insert_content(drive_service, docs_service, doc_name, preprocessed_content, output_folder_id)
+    else:
+        # No template requested or Drive service not available
+        final_doc_id = _create_blank_document_and_insert_content(drive_service, docs_service, doc_name, preprocessed_content, output_folder_id)
     
-    markdown_file = drive_service.files().create(
-        body={
-            'name': f"{doc_name}.md",
-            'mimeType': 'text/markdown',
-            'parents': [output_folder_id] if output_folder_id else []
-        },
-        media_body=media
-    ).execute()
+    if footnote_map:
+        logger.info(f"Converting {len(footnote_map)} footnotes to real Google Docs footnotes")
+        convert_footnotes_to_real(final_doc_id, docs_service, footnote_map)
     
-    markdown_file_id = markdown_file['id']
-    logger.info(f"Uploaded Markdown file: {markdown_file_id}")
-    
-    converted_doc = drive_service.files().copy(
-        fileId=markdown_file_id,
+    return final_doc_id
+
+
+def _create_blank_document_and_insert_content(drive_service, docs_service, doc_name: str, content: str, output_folder_id: Optional[str] = None) -> str:
+    """Create a blank document and insert content."""
+    # Create blank document
+    doc = drive_service.files().create(
         body={
             'name': doc_name,
             'mimeType': 'application/vnd.google-apps.document',
             'parents': [output_folder_id] if output_folder_id else []
         }
     ).execute()
+    doc_id = doc['id']
+    logger.info(f"Created blank document: {doc_id}")
     
-    final_doc_id = converted_doc['id']
-    logger.info(f"Converted Markdown to Google Doc: {final_doc_id}")
+    # Insert content
+    requests = [{
+        'insertText': {
+            'location': {'index': 1},
+            'text': content
+        }
+    }]
     
-    if footnote_map:
-        logger.info(f"Converting {len(footnote_map)} footnotes to real Google Docs footnotes")
-        convert_footnotes_to_real(final_doc_id, docs_service, footnote_map)
+    docs_service.documents().batchUpdate(
+        documentId=doc_id,
+        body={'requests': requests}
+    ).execute()
     
-    if template_doc_id:
-        logger.info(f"Template styling would be applied here (future enhancement)")
-    
-    drive_service.files().delete(fileId=markdown_file_id).execute()
-    logger.info(f"Cleaned up temporary Markdown file: {markdown_file_id}")
-    
-    return final_doc_id
+    logger.info(f"Inserted content into document: {doc_id}")
+    return doc_id
 
 def create_document(drive_service, docs_service, md_file: str, template_doc_id: Optional[str] = None, output_folder_id: Optional[str] = None) -> str:
     """Create a Google Doc from markdown using simple upload."""
