@@ -293,9 +293,35 @@ def upload_markdown_to_docs(drive_service, docs_service, file_path: str, templat
             html_converter = markdown.Markdown(extensions=['extra'])
             content_html = html_converter.convert(preprocessed_content)
             
-            # Replace the {{CONTENT}} placeholder in template
+            # Process template HTML to insert content at the right location
             template_html_str = template_html.decode('utf-8') if isinstance(template_html, bytes) else template_html
-            final_html = template_html_str.replace('{{CONTENT}}', content_html)
+            
+            # Look for the specific CONTENT placeholder pattern from the actual template
+            # Based on inspection of the exported template, the pattern is:
+            # <p style="..."><span style="...">{{CONTENT}}</span></p>
+            import re
+            
+            # Pattern to match the content placeholder with its surrounding span
+            content_pattern = r'(<p[^>]*>\s*<span[^>]*>\s*\{\{CONTENT\}\}\s*</span>\s*</p>)'
+            
+            # Check if we found the pattern
+            match = re.search(content_pattern, template_html_str, re.IGNORECASE)
+            if match:
+                # Replace the content placeholder with our markdown HTML
+                final_html = re.sub(content_pattern, content_html, template_html_str, count=1)
+                logger.info("Found CONTENT placeholder and replaced with markdown content")
+            else:
+                # Fallback: look for just the CONTENT text without tags
+                simple_pattern = r'\{\{CONTENT\}\}'
+                simple_match = re.search(simple_pattern, template_html_str, re.IGNORECASE)
+                if simple_match:
+                    # Replace just the CONTENT text
+                    final_html = re.sub(simple_pattern, content_html, template_html_str, count=1)
+                    logger.info("Found CONTENT text and replaced with markdown content")
+                else:
+                    # Last resort: append to body content before closing body tag
+                    final_html = template_html_str.replace('</body>', f'{content_html}</body>')
+                    logger.warning("Could not find CONTENT placeholder, appending to body")
             
             # Upload the final HTML and convert to Google Doc
             media = MediaIoBaseUpload(
@@ -393,9 +419,35 @@ def create_tabs_document(drive_service, docs_service, md_files: List[str], templ
                 # Add section heading and content
                 combined_content_html += f'<h1>{tab_title}</h1>\n{content_html}\n\n'
             
-            # Replace the {{CONTENT}} placeholder in template
+            # Process template HTML to insert content at the right location
             template_html_str = template_html.decode('utf-8') if isinstance(template_html, bytes) else template_html
-            final_html = template_html_str.replace('{{CONTENT}}', combined_content_html)
+            
+            # Look for the specific CONTENT placeholder pattern from the actual template
+            # Based on inspection of the exported template, the pattern is:
+            # <p style="..."><span style="...">{{CONTENT}}</span></p>
+            import re
+            
+            # Pattern to match the content placeholder with its surrounding span
+            content_pattern = r'(<p[^>]*>\s*<span[^>]*>\s*\{\{CONTENT\}\}\s*</span>\s*</p>)'
+            
+            # Check if we found the pattern
+            match = re.search(content_pattern, template_html_str, re.IGNORECASE)
+            if match:
+                # Replace the content placeholder with our markdown HTML
+                final_html = re.sub(content_pattern, combined_content_html, template_html_str, count=1)
+                logger.info("Found CONTENT placeholder and replaced with markdown content")
+            else:
+                # Fallback: look for just the CONTENT text without tags
+                simple_pattern = r'\{\{CONTENT\}\}'
+                simple_match = re.search(simple_pattern, template_html_str, re.IGNORECASE)
+                if simple_match:
+                    # Replace just the CONTENT text
+                    final_html = re.sub(simple_pattern, combined_content_html, template_html_str, count=1)
+                    logger.info("Found CONTENT text and replaced with markdown content")
+                else:
+                    # Last resort: append to body content before closing body tag
+                    final_html = template_html_str.replace('</body>', f'{combined_content_html}</body>')
+                    logger.warning("Could not find CONTENT placeholder, appending to body")
             
             # Upload the final HTML and convert to Google Doc
             media = MediaIoBaseUpload(
