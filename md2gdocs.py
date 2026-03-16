@@ -279,37 +279,45 @@ def upload_markdown_to_docs(drive_service, docs_service, file_path: str, templat
     
     preprocessed_content, footnote_map = preprocess_markdown(markdown_content)
     
-    # If template is specified, copy the template document first
+    # If template is specified, use the template workflow
     if template_doc_id and drive_service:
         try:
-            # Copy the template document
-            copied_file = drive_service.files().copy(
+            # Export template as HTML
+            template_html = drive_service.files().export(
                 fileId=template_doc_id,
+                mimeType='text/html'
+            ).execute()
+            
+            # Convert markdown to HTML
+            import markdown
+            html_converter = markdown.Markdown(extensions=['extra'])
+            content_html = html_converter.convert(preprocessed_content)
+            
+            # Replace the {{CONTENT}} placeholder in template
+            template_html_str = template_html.decode('utf-8') if isinstance(template_html, bytes) else template_html
+            final_html = template_html_str.replace('{{CONTENT}}', content_html)
+            
+            # Upload the final HTML and convert to Google Doc
+            media = MediaIoBaseUpload(
+                io.BytesIO(final_html.encode('utf-8')),
+                mimetype='text/html',
+                resumable=True
+            )
+            
+            final_doc = drive_service.files().create(
                 body={
                     'name': doc_name,
+                    'mimeType': 'application/vnd.google-apps.document',
                     'parents': [output_folder_id] if output_folder_id else []
-                }
-            ).execute()
-            final_doc_id = copied_file['id']
-            logger.info(f"Created document from template {template_doc_id}: {final_doc_id}")
-            
-            # Insert the markdown content into the copied template
-            requests = [{
-                'insertText': {
-                    'location': {'index': 1},  # Start after any potential header
-                    'text': preprocessed_content
-                }
-            }]
-            
-            docs_service.documents().batchUpdate(
-                documentId=final_doc_id,
-                body={'requests': requests}
+                },
+                media_body=media
             ).execute()
             
-            logger.info(f"Inserted markdown content into template document: {final_doc_id}")
+            final_doc_id = final_doc['id']
+            logger.info(f"Created document from template {template_doc_id} via HTML conversion: {final_doc_id}")
             
         except Exception as e:
-            logger.warning(f"Could not use template (Drive API may not be enabled or template invalid): {str(e)}")
+            logger.warning(f"Could not use template HTML workflow: {str(e)}")
             # Fall back to creating blank document and inserting content
             final_doc_id = _create_blank_document_and_insert_content(drive_service, docs_service, doc_name, preprocessed_content, output_folder_id)
     else:
@@ -358,6 +366,73 @@ def create_document(drive_service, docs_service, md_file: str, template_doc_id: 
 
 def create_tabs_document(drive_service, docs_service, md_files: List[str], template_doc_id: Optional[str] = None, output_folder_id: Optional[str] = None) -> str:
     """Create a single doc with sections for each markdown file."""
+    # If template is specified, use template workflow
+    if template_doc_id and drive_service:
+        try:
+            # Export template as HTML
+            template_html = drive_service.files().export(
+                fileId=template_doc_id,
+                mimeType='text/html'
+            ).execute()
+            
+            # Convert markdown files to HTML and combine
+            import markdown
+            html_converter = markdown.Markdown(extensions=['extra'])
+            
+            combined_content_html = ""
+            for md_file in md_files:
+                tab_title = Path(md_file).stem
+                
+                # Read the markdown content
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    markdown_content = f.read()
+                
+                # Convert markdown to HTML
+                content_html = html_converter.convert(markdown_content)
+                
+                # Add section heading and content
+                combined_content_html += f'<h1>{tab_title}</h1>\n{content_html}\n\n'
+            
+            # Replace the {{CONTENT}} placeholder in template
+            template_html_str = template_html.decode('utf-8') if isinstance(template_html, bytes) else template_html
+            final_html = template_html_str.replace('{{CONTENT}}', combined_content_html)
+            
+            # Upload the final HTML and convert to Google Doc
+            media = MediaIoBaseUpload(
+                io.BytesIO(final_html.encode('utf-8')),
+                mimetype='text/html',
+                resumable=True
+            )
+            
+            final_doc = drive_service.files().create(
+                body={
+                    'name': 'Markdown Batch Conversion',
+                    'mimeType': 'application/vnd.google-apps.document',
+                    'parents': [output_folder_id] if output_folder_id else []
+                },
+                media_body=media
+            ).execute()
+            
+            doc_id = final_doc['id']
+            logger.info(f"Created document from template {template_doc_id} via HTML conversion: {doc_id}")
+            
+            # Move to output folder if specified
+            if output_folder_id:
+                drive_service.files().update(
+                    fileId=doc_id,
+                    addParents=output_folder_id,
+                    fields='id, parents'
+                ).execute()
+                logger.info(f"Moved combined document to folder {output_folder_id}")
+                
+            return doc_id
+            
+        except Exception as e:
+            logger.warning(f"Could not use template HTML workflow for tabs mode: {str(e)}")
+            # Fall back to original method
+            pass
+    
+    # Original implementation (fallback or when no template)
     # Create main document
     doc = drive_service.files().create(
         body={

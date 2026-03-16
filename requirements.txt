@@ -3,3 +3,4 @@ google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
 python-dotenv==1.0.0
 typer==0.21.1
+markdown==3.5
