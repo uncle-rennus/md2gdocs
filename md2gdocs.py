@@ -215,78 +215,6 @@ def create_document(
     )
 
 
-def create_tabs_document(
-    drive_service,
-    docs_service,
-    md_files: List[str],
-    template_doc_id: Optional[str] = None,
-    output_folder_id: Optional[str] = None,
-) -> str:
-    """Create a single doc with sections for each markdown file."""
-    # Create main document
-    doc = (
-        drive_service.files()
-        .create(
-            body={
-                "name": "Markdown Batch Conversion",
-                "mimeType": "application/vnd.google-apps.document",
-            }
-        )
-        .execute()
-    )
-    doc_id = doc["id"]
-    logger.info(f"Created main document: {doc_id}")
-
-    # Move to output folder if specified
-    if output_folder_id:
-        drive_service.files().update(
-            fileId=doc_id, addParents=output_folder_id, fields="id, parents"
-        ).execute()
-        logger.info(f"Moved combined document to folder {output_folder_id}")
-
-    # For tabs mode, we'll append each file's content using Docs API
-    for md_file in md_files:
-        tab_title = Path(md_file).stem
-
-        # Read the markdown content
-        with open(md_file, "r", encoding="utf-8") as f:
-            markdown_content = f.read()
-
-        # Add section heading
-        docs_service.documents().batchUpdate(
-            documentId=doc_id,
-            body={
-                "requests": [
-                    {
-                        "insertText": {
-                            "location": {"index": 1},
-                            "text": f"\n\n=== {tab_title} ===\n\n",
-                        }
-                    }
-                ]
-            },
-        ).execute()
-
-        # Insert the markdown content
-        docs_service.documents().batchUpdate(
-            documentId=doc_id,
-            body={
-                "requests": [
-                    {
-                        "insertText": {
-                            "location": {"index": 1},
-                            "text": markdown_content + "\n\n",
-                        }
-                    }
-                ]
-            },
-        ).execute()
-
-        logger.info(f"Added content from {md_file}")
-
-    return doc_id
-
-
 def discover_markdown_files(patterns: List[str]) -> List[str]:
     """Discover markdown files using glob patterns."""
     files = []
@@ -373,10 +301,10 @@ def version():
 def setup():
     """Show setup instructions."""
     typer.echo("=== md2gdocs Setup ===")
-    typer.echo("1. Install dependencies: pip install -r requirements.txt")
+    typer.echo("1. Install: pip install -e .")
     typer.echo("2. Copy .env.example to .env and add your Google credentials")
-    typer.echo("3. Enable Google Docs API in Google Cloud Console")
-    typer.echo("4. Run: python md2gdocs.py --help for usage")
+    typer.echo("3. Enable Google Docs API and Drive API in Google Cloud Console")
+    typer.echo("4. Run: md2gdocs --help for usage")
 
 
 if __name__ == "__main__":

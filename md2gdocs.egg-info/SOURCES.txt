@@ -1,0 +1,9 @@
+README.md
+md2gdocs.py
+pyproject.toml
+md2gdocs.egg-info/PKG-INFO
+md2gdocs.egg-info/SOURCES.txt
+md2gdocs.egg-info/dependency_links.txt
+md2gdocs.egg-info/entry_points.txt
+md2gdocs.egg-info/requires.txt
+md2gdocs.egg-info/top_level.txt

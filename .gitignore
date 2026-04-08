@@ -1,7 +1,10 @@
 .venv
 .env
+.env.*
 token.json
 client_secret.json
 __pycache__/
 *.pyc
 .DS_Store
+.ruff_cache/
+tests/

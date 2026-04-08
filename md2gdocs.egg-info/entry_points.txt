@@ -1,0 +1,2 @@
+[console_scripts]
+md2gdocs = md2gdocs:app
