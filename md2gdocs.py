@@ -69,7 +69,7 @@ def load_secrets() -> Dict[str, str]:
     return secrets
 
 
-def authenticate(secrets: Dict[str, str]) -> Credentials:
+def authenticate(secrets: Dict[str, str], no_browser: bool = False) -> Credentials:
     """Authenticate with Google APIs and cache token."""
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -90,7 +90,14 @@ def authenticate(secrets: Dict[str, str]) -> Credentials:
                 },
                 SCOPES,
             )
-            creds = flow.run_local_server(port=0)
+            if no_browser:
+                auth_url, _ = flow.authorization_url()
+                typer.echo(f"Visit this URL and authorize:\n{auth_url}")
+                code = typer.prompt("Enter the authorization code")
+                flow.fetch_token(code=code)
+                creds = flow.credentials
+            else:
+                creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
     return creds
@@ -240,6 +247,11 @@ def convert(
         "-d",
         help="Preview what would be converted without uploading",
     ),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Do not open browser for OAuth, use console input instead",
+    ),
 ):
     """Convert Markdown files to Google Docs using Google Drive's built-in conversion."""
 
@@ -249,7 +261,7 @@ def convert(
 
     try:
         secrets = load_secrets()
-        creds = authenticate(secrets)
+        creds = authenticate(secrets, no_browser)
 
         drive_service = build("drive", "v3", credentials=creds)
         logger.info("Drive service initialized")
